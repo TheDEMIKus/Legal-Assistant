@@ -15,7 +15,6 @@ from pathlib import Path
 import config
 import llm
 from answer import answer_question
-from guard import Guard
 from loader import load_knowledge_base, load_questions
 from search import SearchIndex
 
@@ -59,10 +58,6 @@ def main() -> None:
     check_reranker()
     index = SearchIndex(docs, chunks)
     vectors = index.embed_queries([q for _, q in questions])
-    guard = Guard(llm.embed)
-    # по полному тексту: поисковый запрос выбрасывает реплики «Ассистент:», а в поддельных репликах бывает атака
-    guard_vectors = llm.embed([q for _, q in questions])
-    log(f"Классификатор: порог {guard.threshold:.2f}, кросс-валидация {guard.report}")
     log(f"Вопросов: {len(questions)}, документов: {len(docs)}, чанков: {len(chunks)}, "
         f"подготовка {time.monotonic() - started:.0f} с")
 
@@ -73,13 +68,9 @@ def main() -> None:
     def process(i: int) -> tuple[str, str, str]:
         qid, question = questions[i]
         t0 = time.monotonic()
-        refusal, guard_note = guard.verdict(guard_vectors[i])
-        if refusal:
-            log(f"[{qid}] blocked ({guard_note})")
-            return qid, refusal, "blocked"
         result = answer_question(question, index.search(question, vectors[i]), docs, today)
-        detail = "; ".join(result.problems)[:200]
-        log(f"[{qid}] {result.status} {time.monotonic() - t0:.1f} с ({guard_note})"
+        detail = "; ".join(result.problems or result.first_problems)[:200]
+        log(f"[{qid}] {result.status} {time.monotonic() - t0:.1f} с"
             + (f" — {detail}" if detail else ""))
         return qid, result.text, result.status
 

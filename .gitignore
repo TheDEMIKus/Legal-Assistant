@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -219,7 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-=======
 __pycache__/
 *.py[oc]
 .venv/
@@ -229,8 +227,13 @@ __pycache__/
 
 data/
 starter/
+eval/
 
 # Результаты прогонов
 submission.csv
 submission.zip
->>>>>>> ai
+submission-examples.zip
+
+# Локальная оценка
+eval/work/
+eval/results/

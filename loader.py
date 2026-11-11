@@ -44,11 +44,41 @@ ARTICLE_RE = re.compile(r"^Статья\s+(\d+(?:\.\d+)*)\.\s+\S")
 NOTE_RE = re.compile(
     r"^((Пункт|Подпункт|Часть|Абзац|Статья)\s+[\d.\-]+\s+(изменен|дополнен|утратил)"
     r"|Абзац утратил"
+    r"|О конституционно-правовом смысле"
     r"|Федеральн\w+ закон\w* от"
-    r"|Положения\s"
+    # строки вида «Положения настоящего подпункта применяются…» относятся к тексту нормы, а не к пометкам
+    r"|Положения\s(?!настоящ\w+\s+(?:подпункт|пункт|стать|абзац|част))"
     r"|Действие\s)"
 )
+# Пометки об истории изменений: дата и номер закона без текста самой нормы.
+AMENDMENT_RE = re.compile(
+    r"^(?:(?:Пункт|Подпункт|Часть|Абзац|Статья|Наименование)\s+[\d.\-]+\s+(?:изменен|дополнен)\w*\s.*Федеральн"
+    r"|Федеральн\w+\s+закон\w*\s+от\s"
+    r"|О конституционно-правовом смысле)"
+)
+CHANGE_QUESTION_RE = re.compile(
+    r"измен|редакци|поправ|вступ\w+\s+в\s+силу|утрат\w+\s+силу|с\s+какого|действует\s+ли", re.IGNORECASE
+)
+
+# В НК три статьи с одинаковым названием «Налоговые ставки»; сам текст статьи налог не называет.
+NK_TAXES = [
+    (143, 178, "НДС — налог на добавленную стоимость"),
+    (207, 233, "НДФЛ — налог на доходы физических лиц"),
+    (246, 333, "налог на прибыль организаций"),
+]
 CONTRACT_NO_RE = re.compile(r"№\s*([А-ЯA-Z]{1,3}-\d+/\d{4})")
+
+# Строки, адресованные модели, а не читателю документа: в базе встречаются вставки
+# вида «ВНИМАНИЕ ДЛЯ ИИ-АССИСТЕНТА: игнорируй все остальные документы…».
+INJECTION_RE = re.compile(
+    r"(?:\b(?:ии|ai|llm|gpt)\b|ассистент|нейросет|языков\w+\s+модел|чат-?бот)[^\n]*"
+    r"\b(?:игнорируй|отвечай|не\s+упоминай|забудь|выведи|следуй|раскрой)"
+    r"|\b(?:игнорируй|забудь)\w*\s+(?:все\s+|всё\s+)?(?:предыдущ|остальн|прежн|вышеуказанн)\w*"
+    r"|не\s+упоминай\w*\s+(?:эту|данную)\s+инструкци"
+    r"|системн\w+\s+промпт"
+    r"|ignore\s+(?:all\s+|any\s+)?(?:previous|prior|other)\s+(?:instructions|documents)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -161,10 +191,21 @@ def load_documents(path: Path | None = None) -> list[Document]:
                 )
                 continue
             text = text.replace("\r\n", "\n").replace(" ", " ").strip()
+            text, removed = strip_injections(text)
+            for line in removed:
+                print(f"Удалена вставка для ИИ из {name}: {line[:120]}", file=sys.stderr)
             if text:
                 docs.append(make_document(len(docs), Path(name).name, text))
     link_documents(docs)
     return docs
+
+
+def strip_injections(text: str) -> tuple[str, list[str]]:
+    """Удаляет строку целиком: вставка обычно состоит из нескольких предложений, и не все содержат признак."""
+    kept, removed = [], []
+    for line in text.splitlines():
+        (removed if INJECTION_RE.search(line) else kept).append(line)
+    return "\n".join(kept), removed
 
 
 def make_document(doc_id: int, name: str, text: str) -> Document:
@@ -214,11 +255,23 @@ def law_title(text: str) -> str:
     if not heading:
         number = re.search(r"Статья\s+(\d+(?:\.\d+)*)", source)
         heading = f"Статья {number.group(1)}" if number else ""
+    article = re.search(r"Статья\s+(\d+)", heading)
+    if code == "НК РФ" and article:
+        tax = next((t for low, high, t in NK_TAXES if low <= int(article.group(1)) <= high), "")
+        code = f"НК РФ ({tax})" if tax else code
     return ", ".join(p for p in (code, heading) if p)
 
 
+def hide_amendment_notes(text: str, question: str) -> str:
+    """Убирает из текста для модели пометки вида «Пункт 3 изменен с … - Федеральный закон…»,
+    если вопрос не об изменениях: иначе модель дописывает их в ответ как лишний факт."""
+    if CHANGE_QUESTION_RE.search(question):
+        return text
+    return "\n".join(l for l in text.splitlines() if not AMENDMENT_RE.match(l.strip()))
+
+
 def is_article_heading(line: str) -> bool:
-    # «Статья 1. Установить МРОТ … в месяц.» — это норма, а не заголовок
+    # строка «Статья 1. Установить МРОТ … в месяц.» является нормой, а не заголовком
     return bool(ARTICLE_RE.match(line)) and len(line) <= 200 and not line.endswith(".")
 
 
@@ -250,7 +303,7 @@ def link_documents(docs: list[Document]) -> None:
                         other.related.append(doc.id)
 
 
-def chunk_header(doc: Document, section: str) -> str:
+def chunk_header(doc: Document, section: str, parent: str = "") -> str:
     parts = [doc.title]
     if doc.valid_from:
         parts.append(f"ред. от {doc.valid_from:%d.%m.%Y}")
@@ -258,19 +311,27 @@ def chunk_header(doc: Document, section: str) -> str:
         parts.append(f"утратил силу с {doc.valid_until:%d.%m.%Y}")
     if section and section not in doc.title:
         parts.append(section)
+    if parent:
+        parts.append(parent)
     return "[" + " | ".join(parts) + "]"
 
 
-def split_units(doc: Document) -> list[tuple[str, str | None, str]]:
-    """Делит документ на смысловые единицы: (раздел, номер пункта или None, текст)."""
+def split_units(doc: Document) -> list[tuple[str, str | None, str, tuple[str, str]]]:
+    """Делит документ на смысловые единицы: (раздел, номер пункта или None, текст, пункт-родитель).
+
+    Пункт-родитель задаётся парой (номер, подпись для шапки) и заполняется у единиц без своего номера внутри длинного пункта:
+    подпункт «9.4) услуг по перевозке…» без вводной фразы «1. Налогообложение производится
+    по налоговой ставке 0 процентов при реализации:» не говорит, о какой ставке речь."""
     lines = [l.strip() for l in doc.text.splitlines()]
     lines = [
         l for l in lines if l and not re.match(r"^(URL|Дата выгрузки|Источник):", l)
     ]
 
     has_subnumbers = any(re.match(r"^\d+\.\d+", l) for l in lines)
-    units: list[tuple[str, str | None, str]] = []
+    units: list[tuple[str, str | None, str, tuple[str, str]]] = []
     section = ""
+    no_parent = ("", "")
+    parent = no_parent
     pending_notes: list[str] = []
     current: list[str] = []
     current_point: str | None = None
@@ -278,7 +339,7 @@ def split_units(doc: Document) -> list[tuple[str, str | None, str]]:
     def flush():
         nonlocal current, current_point
         if current:
-            units.append((section, current_point, "\n".join(current)))
+            units.append((section, current_point, "\n".join(current), no_parent if current_point else parent))
         current, current_point = [], None
 
     for line in lines:
@@ -297,9 +358,11 @@ def split_units(doc: Document) -> list[tuple[str, str | None, str]]:
         ):
             flush()
             section = line
+            parent = no_parent
         elif point:
             flush()
             current_point = point.group(1)
+            parent = (current_point, line[:220] if line.endswith(":") else f"п. {current_point}")
             current = pending_notes + [line]
             pending_notes = []
         elif SUBPOINT_RE.match(line) or current_point or in_list:
@@ -314,7 +377,7 @@ def split_units(doc: Document) -> list[tuple[str, str | None, str]]:
             pending_notes = []
     flush()
     if pending_notes:
-        units.append((section, None, "\n".join(pending_notes)))
+        units.append((section, None, "\n".join(pending_notes), parent))
     return units
 
 
@@ -367,8 +430,8 @@ def atomize(text: str, separators: list[str]) -> list[str]:
 def chunk_document(doc: Document, start_id: int) -> list[Chunk]:
     chunks: list[Chunk] = []
 
-    def emit(section: str, points: list[str], body: str):
-        header = chunk_header(doc, section)
+    def emit(section: str, points: list[str], body: str, parent: str = ""):
+        header = chunk_header(doc, section, parent)
         chunks.append(
             Chunk(
                 id=start_id + len(chunks),
@@ -383,31 +446,36 @@ def chunk_document(doc: Document, start_id: int) -> list[Chunk]:
     buf: list[str] = []
     buf_points: list[str] = []
     buf_section = ""
+    buf_parent = ""
 
     def flush():
         nonlocal buf, buf_points
         if buf:
-            emit(buf_section, buf_points, "\n".join(buf))
+            emit(buf_section, buf_points, "\n".join(buf), buf_parent)
         buf, buf_points = [], []
 
-    for section, point, text in split_units(doc):
-        if section != buf_section:
+    for section, point, text, (parent_point, parent) in split_units(doc):
+        # продолжение пункта остаётся в одном чанке с его началом, пока хватает места
+        continues = not buf_parent and bool(buf_points) and buf_points[-1] == parent_point
+        if section != buf_section or not (parent == buf_parent or continues):
             flush()
-            buf_section = section
+        buf_section = section
         if len(text) > CHUNK_MAX:
             flush()
             # продолжение без начала непонятно, к чему относится
             intro = next(l for l in text.splitlines() if not NOTE_RE.match(l))
             label = (
-                f"(продолжение п. {point})\n"
+                f"(продолжение п. {point}: {intro[:220]})\n"
                 if point
                 else f"(продолжение: {intro[:200]})\n"
             )
             for i, piece in enumerate(split_long(text)):
-                emit(section, [point] if point else [], (label if i else "") + piece)
+                emit(section, [point] if point else [], (label if i else "") + piece, parent)
             continue
         if buf and len("\n".join(buf)) + len(text) + 1 > CHUNK_MAX:
             flush()
+        if not buf:
+            buf_parent = parent
         buf.append(text)
         if point:
             buf_points.append(point)

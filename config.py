@@ -37,13 +37,6 @@ def env_int(name: str, default: int, low: int, high: int) -> int:
         return default
 
 
-def env_float(name: str, default: float, low: float, high: float) -> float:
-    try:
-        return max(low, min(high, float(env(name).replace(",", "."))))
-    except ValueError:
-        return default
-
-
 BASE_URL = env("LLM_BASE_URL", "BASE_URL", "OPENAI_BASE_URL").rstrip("/")
 LLM_API_KEY = env("LLM_API_KEY", "OPENAI_API_KEY")
 EMB_API_KEY = env("EMBEDDER_API_KEY") or LLM_API_KEY
@@ -57,13 +50,16 @@ RERANKER_MODEL = env("RERANKER_MODEL", default="qwen/qwen3-reranker-8b")
 
 DATA_DIR = Path(env("DATA_DIR", default="data"))
 
-TEMPERATURE = env_float("TEMPERATURE", 0.1, 0.0, 2.0)
-# снизу 256: меньше не влезет JSON с цитатами; сверху без ограничения, это решение платформы
-MAX_TOKENS = env_int("MAX_TOKENS", 1500, 256, 1_000_000)
-MAX_WORKERS = env_int("MAX_WORKERS", 4, 1, 16)
+# Параметры генерации и поиска заданы в коде, одноимённые переменные платформы не читаются:
+# их значения подобраны под стартер, а решение проверено на этих.
+TEMPERATURE = 0.1
+MAX_TOKENS = 3000
+# при обрезанном ответе лимит удваивается до этого потолка
+MAX_TOKENS_CEILING = 12000
+TOP_K = 20  # кандидатов от каждого поиска, а не итоговых
+RERANKER_TOP_N = 5
 
-TOP_K = env_int("TOP_K", 20, 1, 100)  # кандидатов от каждого поиска, а не итоговых
-RERANKER_TOP_N = env_int("RERANKER_TOP_N", 5, 1, 20)
+MAX_WORKERS = env_int("MAX_WORKERS", 4, 1, 16)
 
 HTTP_TIMEOUT = 60.0
 HTTP_RETRIES = 3

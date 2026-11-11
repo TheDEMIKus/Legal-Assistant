@@ -13,7 +13,7 @@ import config
 import llm
 from loader import Chunk, Document
 
-# TOP_K задаёт платформа; без потолка большой TOP_K сделал бы реранк слишком медленным
+# потолок на случай увеличения TOP_K: реранк длинного списка кандидатов слишком медленный
 MAX_RERANK_CANDIDATES = 40
 MAX_RELATED = 2
 

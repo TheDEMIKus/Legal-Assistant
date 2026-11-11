@@ -22,6 +22,10 @@ class LLMError(Exception):
     pass
 
 
+class EmptyResponse(LLMError):
+    """Сбой одного ответа, а не API: обрабатывается на уровне вопроса, прогон не прерывается."""
+
+
 _client: httpx.Client | None = None
 _client_lock = threading.Lock()
 _stats_lock = threading.Lock()
@@ -30,6 +34,7 @@ stats = {
     "embed": 0,
     "rerank": 0,
     "retries": 0,
+    "truncated": 0,
     "prompt_tokens": 0,
     "completion_tokens": 0,
 }
@@ -112,7 +117,8 @@ def chat(
         payload["response_format"] = {"type": "json_object"}
 
     # DeepSeek в JSON-режиме возвращает строку из пробелов, если не смог выдать JSON
-    for _ in range(2):
+    content = ""
+    for _ in range(3):
         _count("chat")
         data = post("/chat/completions", payload, config.LLM_API_KEY)
         usage = data.get("usage") or {}
@@ -125,11 +131,17 @@ def chat(
             raise LLMError(f"chat: неожиданный ответ: {str(data)[:200]}") from None
         if not isinstance(content, str):
             raise LLMError(f"chat: content не строка: {str(content)[:200]}")
-        if choice.get("finish_reason") == "length":
-            print("chat: ответ обрезан по max_tokens", file=sys.stderr)
-        if content.strip():
+        truncated = choice.get("finish_reason") == "length"
+        if content.strip() and not truncated:
             return content.strip()
-    raise LLMError("модель вернула пустой ответ")
+        if truncated:
+            # в лимит входят и скрытые рассуждения модели, поэтому обрезаться может даже короткий ответ
+            _count("truncated")
+            payload["max_tokens"] = min(payload["max_tokens"] * 2, config.MAX_TOKENS_CEILING)
+    if content.strip():
+        print("chat: ответ обрезан по max_tokens и после повторов", file=sys.stderr)
+        return content.strip()
+    raise EmptyResponse("модель вернула пустой ответ")
 
 
 def parse_json(text: str) -> dict | None:
