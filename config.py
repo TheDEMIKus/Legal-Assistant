@@ -59,6 +59,9 @@ MAX_TOKENS_CEILING = 12000
 TOP_K = 20  # кандидатов от каждого поиска, а не итоговых
 RERANKER_TOP_N = 5
 
+# проверка ответа LLM-судьёй; REVIEW=0 отключает её для сравнения прогонов
+REVIEW = env("REVIEW", default="1") != "0"
+
 MAX_WORKERS = env_int("MAX_WORKERS", 4, 1, 16)
 
 HTTP_TIMEOUT = 60.0
@@ -84,5 +87,5 @@ def describe() -> str:
         f"base_url={BASE_URL} key_set={bool(LLM_API_KEY)} "
         f"llm={LLM_MODEL} emb={EMB_MODEL} reranker={RERANKER_MODEL} "
         f"data_dir={DATA_DIR} temperature={TEMPERATURE} max_tokens={MAX_TOKENS} "
-        f"workers={MAX_WORKERS} top_k={TOP_K} top_n={RERANKER_TOP_N}"
+        f"workers={MAX_WORKERS} top_k={TOP_K} top_n={RERANKER_TOP_N} review={REVIEW}"
     )
