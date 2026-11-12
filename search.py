@@ -15,7 +15,14 @@ from loader import Chunk, Document
 
 # потолок на случай увеличения TOP_K: реранк длинного списка кандидатов слишком медленный
 MAX_RERANK_CANDIDATES = 40
-MAX_RELATED = 2
+MAX_RELATED = 4
+
+ENTITY_HINT_RE = re.compile(
+    r"[А-ЯA-Z]{1,3}-\d+[/-]\d{4}"
+    r"|«[^»]{2,60}»"
+    r"|(?:ст\.|стать\w*|п\.|пункт\w*)\s*\d+(?:\.\d+)*(?:-\d+)?",
+    re.IGNORECASE,
+)
 
 STOPWORDS = set("""
 и в во на по с со к ко о об от до за из у не ни ли а но же бы то что как это или для при
@@ -25,8 +32,8 @@ STOPWORDS = set("""
 """.split())
 
 ENDINGS = sorted("""
-иями ями ами ого его ому ему ыми ими ией ией ость ости остью ений ениям ениями ениях ением ению ения ение
-ание ания аний анием анию ова ева ует ают яют ить ать ять еть уть ешь ете ите ишь ает яет
+иями ями ами ого его ому ему ыми ими ией ость ости остью ений ениям ениями ениях ением ению ения ение ении
+ание ания аний анием анию ании аниях аниями аниям ова ева ует ают яют ить ать ять еть уть ешь ете ите ишь ает яет
 ую юю ая яя ое ее ые ие ой ей ий ый ом ем ах ях ов ев ам ям ут ют ат ят ет ит ть ла ли ло на ны но
 а я о е ы и у ю ь
 """.split(), key=len, reverse=True)
@@ -51,6 +58,13 @@ ID_RE = re.compile(r"\b[а-яa-z]{1,3}-\d+[/-]\d{4}\b")
 WORD_RE = re.compile(r"[а-яa-z0-9]+(?:-[а-яa-z0-9]+)*")
 TURN_RE = re.compile(r"^(Пользователь|Ассистент)\s*:\s*", re.MULTILINE)
 
+def _assistant_entities(dialog: list[tuple[str, str]]) -> str:
+    """Извлекает номера договоров, названия в кавычках и номера статей из реплик ассистента в диалоге."""
+    found: list[str] = []
+    for role, text in dialog:
+        if role == "Ассистент":
+            found += ENTITY_HINT_RE.findall(text)
+    return " ".join(dict.fromkeys(found))
 
 def stem(word: str) -> str:
     if word.isdigit() or len(word) <= 3:
@@ -88,16 +102,23 @@ def parse_dialog(question: str) -> list[tuple[str, str]]:
 
 
 def search_query(question: str) -> str:
-    """Для диалога: реплики пользователя, последняя повторена, чтобы весила больше."""
-    turns = [text for role, text in parse_dialog(question) if role == "Пользователь"]
+    """Для диалога: реплики пользователя (последняя удвоена) + сущности из реплик ассистента."""
+    dialog = parse_dialog(question)
+    turns = [text for role, text in dialog if role == "Пользователь"]
     if not turns:
         return question
-    return " ".join(turns[:-1] + [turns[-1], turns[-1]])
+    hints = _assistant_entities(dialog)
+    parts = ([hints] if hints else []) + turns[:-1] + [turns[-1], turns[-1]]
+    return " ".join(parts)
 
 
 def rerank_query(question: str) -> str:
-    turns = [text for role, text in parse_dialog(question) if role == "Пользователь"]
-    return " ".join(turns) if turns else question
+    dialog = parse_dialog(question)
+    turns = [text for role, text in dialog if role == "Пользователь"]
+    if not turns:
+        return question
+    hints = _assistant_entities(dialog)
+    return (" ".join(turns) + (" " + hints if hints else "")).strip()
 
 
 @dataclass
@@ -130,20 +151,26 @@ class SearchIndex:
         return hits + self.related_hits(hits, vector)
 
     def related_hits(self, hits: list[Hit], relevance: np.ndarray) -> list[Hit]:
-        """Допсоглашения и письма, меняющие найденный документ, модель должна видеть вместе с ним."""
-        found_docs = {h.chunk.doc_id for h in hits}
+        """Допсоглашения, письма и другие редакции найденного документа подтягиваются вместе с ним."""
+        found_chunks = {h.chunk.id for h in hits}
         extra: list[Hit] = []
-        # только для лучших результатов: документ, найденный случайно, тянул бы лишний шум
-        for hit in hits[:2]:
+        seen_related_docs: set[int] = set()
+        for hit in hits[:3]:
             for doc_id in self.docs[hit.chunk.doc_id].related:
-                if doc_id in found_docs or len(extra) >= MAX_RELATED:
+                if doc_id in seen_related_docs or len(extra) >= MAX_RELATED:
                     continue
-                own = [c for c in self.chunks if c.doc_id == doc_id]
-                best = max(own, key=lambda c: relevance[c.id])
-                if relevance[best.id] <= 0:
+                seen_related_docs.add(doc_id)
+                own = [c for c in self.chunks if c.doc_id == doc_id and c.id not in found_chunks]
+                if not own:
                     continue
-                extra.append(Hit(best, float(relevance[best.id]), "related"))
-                found_docs.add(doc_id)
+                own_sorted = sorted(own, key=lambda c: float(relevance[c.id]), reverse=True)
+                # Если документ короткий (допсоглашение из 2 чанков), берём до 2 чанков, чтобы не потерять суть за преамбулой
+                take = 2 if len(own) <= 3 and len(extra) + 2 <= MAX_RELATED else 1
+                for best in own_sorted[:take]:
+                    if relevance[best.id] <= 0:
+                        continue
+                    extra.append(Hit(best, float(relevance[best.id]), "related"))
+                    found_chunks.add(best.id)
         return extra
 
 

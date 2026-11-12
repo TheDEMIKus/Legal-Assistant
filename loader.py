@@ -201,10 +201,25 @@ def load_documents(path: Path | None = None) -> list[Document]:
 
 
 def strip_injections(text: str) -> tuple[str, list[str]]:
-    """Удаляет строку целиком: вставка обычно состоит из нескольких предложений, и не все содержат признак."""
+    """Удаляет вредоносные вставки, сохраняя настоящие пункты договора, если они на той же строке."""
     kept, removed = [], []
     for line in text.splitlines():
-        (removed if INJECTION_RE.search(line) else kept).append(line)
+        if not INJECTION_RE.search(line):
+            kept.append(line)
+            continue
+        # Если в строке несколько предложений или ячеек таблицы, удаляем только части с инъекцией
+        parts = re.split(r"(?<=[.!?])\s+|\s*\|\s*", line)
+        if len(parts) > 1:
+            clean_parts = []
+            for p in parts:
+                if INJECTION_RE.search(p):
+                    removed.append(p)
+                else:
+                    clean_parts.append(p)
+            if clean_parts:
+                kept.append(" ".join(clean_parts))
+        else:
+            removed.append(line)
     return "\n".join(kept), removed
 
 
@@ -255,9 +270,14 @@ def law_title(text: str) -> str:
     if not heading:
         number = re.search(r"Статья\s+(\d+(?:\.\d+)*)", source)
         heading = f"Статья {number.group(1)}" if number else ""
-    article = re.search(r"Статья\s+(\d+)", heading)
+    article = re.search(r"Статья\s+(\d+(?:\.\d+)*)", heading)
     if code == "НК РФ" and article:
-        tax = next((t for low, high, t in NK_TAXES if low <= int(article.group(1)) <= high), "")
+        art_str = article.group(1)
+        art_main = int(art_str.split(".")[0])
+        if art_str.startswith("333."):
+            tax = "государственная пошлина"
+        else:
+            tax = next((t for low, high, t in NK_TAXES if low <= art_main <= high), "")
         code = f"НК РФ ({tax})" if tax else code
     return ", ".join(p for p in (code, heading) if p)
 
@@ -276,17 +296,41 @@ def is_article_heading(line: str) -> bool:
 
 
 def document_keys(text: str) -> list[str]:
-    """Признаки, по которым на документ ссылаются другие: номер договора или название регламента."""
+    """Признаки, по которым на документ ссылаются другие: номер договора или название регламента/положения."""
     keys = []
-    for line in text.splitlines()[:3]:
-        if line.startswith("ДОГОВОР"):
-            keys += CONTRACT_NO_RE.findall(line)
-        elif line.startswith("РЕГЛАМЕНТ"):
-            name = re.sub(r"\s+ООО.*$", "", line).lower()
-            # по основам слов, чтобы находилось и «Регламента согласования договоров»
-            keys.append(r"\s+".join(w[:5] + r"\w*" for w in name.split()))
-    return keys
+    for line in text.splitlines()[:5]:
+        clean_line = line.strip()
+        if not clean_line:
+            continue
+        found_nos = CONTRACT_NO_RE.findall(clean_line)
+        if found_nos and re.match(r"^(?:ДОГОВОР|КОНТРАКТ)\b", clean_line, re.IGNORECASE):
+            keys += found_nos
+        elif re.match(
+            r"^(?:РЕГЛАМЕНТ|ПОЛОЖЕНИЕ|ПОЛИТИКА|ИНСТРУКЦИЯ|ПОРЯДОК|ПРАВИЛА)\b",
+            clean_line,
+            re.IGNORECASE,
+        ):
+            name = re.sub(r"\s+(?:ООО|АО|ПАО)\b.*$", "", clean_line, flags=re.IGNORECASE).lower()
+            name = re.sub(r"[^\w\s-]", " ", name)
+            words = [w for w in name.split() if len(w) >= 3]
+            if words:
+                keys.append(r"\s+".join(w[:5] + r"\w*" for w in words))
+    return list(dict.fromkeys(keys))
 
+
+def link_documents(docs: list[Document]) -> None:
+    """Связывает документ с его другими редакциями, допсоглашениями и письмами."""
+    for doc in docs:
+        for key in doc.keys:
+            pattern = key if "\\" in key else re.escape(key)
+            for other in docs:
+                if other.id == doc.id or other.kind != "company":
+                    continue
+                if key in other.keys or re.search(pattern, other.text, re.IGNORECASE):
+                    if other.id not in doc.related:
+                        doc.related.append(other.id)
+                    if doc.id not in other.related:
+                        other.related.append(doc.id)
 
 def link_documents(docs: list[Document]) -> None:
     """Связывает документ с теми, что его меняют или дополняют: допсоглашения, письма."""

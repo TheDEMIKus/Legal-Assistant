@@ -146,17 +146,22 @@ def chat(
 
 def parse_json(text: str) -> dict | None:
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            return None
+    for candidate in (text, m.group(0) if (m := re.search(r"\{.*\}", text, re.DOTALL)) else ""):
+        if not candidate:
+            continue
         try:
-            value = json.loads(match.group(0))
+            value = json.loads(candidate)
+            if isinstance(value, dict):
+                return value
         except json.JSONDecodeError:
-            return None
-    return value if isinstance(value, dict) else None
+            continue
+    # Резервный парсинг, если модель не экранировала кавычки внутри цитат
+    ans_match = re.search(r'"answer"\s*:\s*"(.+?)"\s*[,}]', text, re.DOTALL)
+    if ans_match:
+        found_match = re.search(r'"found"\s*:\s*(true|false)', text, re.IGNORECASE)
+        found_val = found_match.group(1).lower() == "true" if found_match else True
+        return {"quotes": [], "found": found_val, "calc": [], "answer": ans_match.group(1).replace('\\"', '"')}
+    return None
 
 
 def chat_json(messages: list[dict], **kwargs) -> tuple[dict | None, str]:

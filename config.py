@@ -56,8 +56,8 @@ TEMPERATURE = 0.1
 MAX_TOKENS = 3000
 # при обрезанном ответе лимит удваивается до этого потолка
 MAX_TOKENS_CEILING = 12000
-TOP_K = 20  # кандидатов от каждого поиска, а не итоговых
-RERANKER_TOP_N = 5
+TOP_K = 30  # кандидатов от каждого поиска, а не итоговых
+RERANKER_TOP_N = 8
 
 MAX_WORKERS = env_int("MAX_WORKERS", 4, 1, 16)
 
