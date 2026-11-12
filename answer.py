@@ -9,7 +9,7 @@ from datetime import date
 import config
 import llm
 from loader import INJECTION_RE, Document, hide_amendment_notes, parse_date
-from search import TURN_RE, Hit
+from search import Hit
 
 MAX_ANSWER_CHARS = 10_000
 
@@ -64,7 +64,7 @@ SYSTEM = """Ты юридический ассистент ООО «Мериди
 Требования к "answer":
 - по существу, без вступлений, обычно 20–60 слов; длиннее только если без этого ответ будет неполным;
 - после каждого утверждения в скобках пункт или статью: (п. 3.1), (ст. 70 ТК РФ);
-- в конце строка «Источник: …» с документами и пунктами;
+- в конце строка «Источник: …» с документами и пунктами, если ответ опирается на документ; при отказе и в ответе на вопрос не по теме такой строки нет;
 - числа, суммы, сроки, даты и номера только такие, как в цитатах, либо результаты из "calc";
 - номера договоров и документов в том виде, как в тексте документа: «№ ПТ-05/2023», а не «ПТ-05-2023».
 
@@ -94,13 +94,17 @@ REVIEW_SYSTEM = """Ты проверяешь ответ юридического
 
 Каждую ошибку подтверди дословной цитатой из <context>, которой ответ противоречит или которую он не учёл. Замечание без дословной цитаты не учитывается. Ответ не переписывай.
 
+Отдельно отметь лишнее: предложение или часть предложения из <answer>, где сообщается факт, о котором в вопросе не спрашивали, и без которого ответ остаётся полным и верным. Обычно это содержание соседних пунктов, условия других документов, расчёты, которых не просили, порядок действий и последствия, не относящиеся к вопросу.
+Лишним не считается: прямой ответ на любую часть вопроса; поправка неверного факта из вопроса или из реплики «Ассистент:»; норма, от которой зависит ответ (условие, исключение, предел, редакция, дополнительное соглашение); одно предложение о том, как эта же норма звучит в действующей редакции; указание, что каких-то документов или подтверждений в базе нет; отказ и совет обратиться к юристу; строка «Источник». При сомнении не отмечай.
+
 Формат ответа: строго JSON-объект
-{"errors": [{"claim": "дословный фрагмент из <answer>, в котором ошибка", "doc": номер фрагмента, "quote": "дословная цитата из этого фрагмента", "why": "одно предложение: в чём расхождение"}]}
-Если ошибок нет: {"errors": []}"""
+{"errors": [{"claim": "дословный фрагмент из <answer>, в котором ошибка", "doc": номер фрагмента, "quote": "дословная цитата из этого фрагмента", "why": "одно предложение: в чём расхождение"}], "extra": [{"text": "дословный фрагмент из <answer>, который нужно убрать", "why": "одно предложение: почему он не отвечает на вопрос"}]}
+Если ошибок и лишнего нет: {"errors": [], "extra": []}"""
 
 TAG_RE = re.compile(r"</?\s*(context|question|doc|answer)\b[^>]*>", re.IGNORECASE)
-YEAR_RE = re.compile(r"\b20\d{2}\b")
 MAX_REMARKS = 3
+MAX_EXTRA = 2
+MIN_EXTRA_CHARS = 15
 
 FACT_RE = re.compile(
     r"\d{1,2}\.\d{1,2}\.\d{4}"
@@ -381,40 +385,19 @@ def finalize(text: str) -> str:
     return cut[: end + 1] if end > MAX_ANSWER_CHARS // 2 else cut
 
 
-def cited_documents(quotes: list, hits: list[Hit], docs: list[Document]) -> list[Document]:
-    found: dict[int, Document] = {}
-    for q in quotes:
-        i = q.get("doc") if isinstance(q, dict) else None
-        if isinstance(i, str) and i.strip().isdigit():
-            i = int(i)
-        if isinstance(i, int) and 1 <= i <= len(hits):
-            doc = docs[hits[i - 1].chunk.doc_id]
-            found[doc.id] = doc
-    return list(found.values())
+def needs_review(result: dict, hits: list[Hit], docs: list[Document]) -> bool:
+    """Ответ по существу проверяется всегда. Отказ проверяется, только если найдены документы компании:
+    возможно, ответ в них есть."""
+    if result.get("found") is not False:
+        return True
+    return any(docs[h.chunk.doc_id].kind == "company" for h in hits)
 
 
-def needs_review(question: str, result: dict, hits: list[Hit], docs: list[Document]) -> bool:
-    """Судья вызывается только там, где возможна ошибка рассуждения, не видимая проверке кодом:
-    дата или число в вопросе (выбор редакции, неверная посылка), диалог, несколько документов,
-    документ с редакциями или меняющими его документами."""
-    if TURN_RE.search(question) or question_period(question) or YEAR_RE.search(question):
-        return True
-    if re.search(r"\d", question):
-        return True
-    quotes = result.get("quotes") if isinstance(result.get("quotes"), list) else []
-    cited = cited_documents(quotes, hits, docs)
-    if len(cited) > 1:
-        return True
-    if any(d.valid_from or d.valid_until or d.related for d in cited):
-        return True
-    # отказ при найденных документах компании: возможно, ответ в них есть
-    return result.get("found") is False and any(
-        docs[h.chunk.doc_id].kind == "company" for h in hits
-    )
-
-
-def review_answer(question: str, hits: list[Hit], answer: str, today: date) -> list[str] | None:
-    """Замечания судьи, подтверждённые дословной цитатой из фрагментов. None при сбое судьи."""
+def review_answer(
+    question: str, hits: list[Hit], answer: str, today: date
+) -> tuple[list[str], list[str]] | None:
+    """Замечания судьи: ошибки, подтверждённые дословной цитатой из фрагментов, и лишние части ответа.
+    None при сбое судьи."""
     user = (
         build_input(question, hits, today)
         + f"<answer>\n{clean(answer)}\n</answer>\n\n"
@@ -450,7 +433,23 @@ def review_answer(question: str, hits: list[Hit], answer: str, today: date) -> l
             f"В ответе: «{claim.strip()[:200]}». {why.strip()[:300]} "
             f"Фрагмент {i}: «{quote.strip()[:400]}»."
         )
-    return remarks[:MAX_REMARKS]
+
+    extra: list[str] = []
+    found = result.get("extra") if isinstance(result.get("extra"), list) else []
+    for item in found:
+        text = item.get("text") if isinstance(item, dict) else None
+        if not isinstance(text, str) or len(text.strip()) < MIN_EXTRA_CHARS:
+            continue
+        # убирать можно только то, что в ответе есть дословно; строка источников остаётся
+        if "..." in text or "…" in text or norm(text).startswith("источник"):
+            continue
+        if norm(text).strip(" .,;:") in answer_n:
+            extra.append(text.strip())
+    return remarks[:MAX_REMARKS], extra[:MAX_EXTRA]
+
+
+def facts(text: str) -> set[str]:
+    return {norm(f) for f in FACT_RE.findall(text)}
 
 
 def reviewed(
@@ -465,28 +464,37 @@ def reviewed(
 ) -> Answer:
     """Судья только указывает на ошибку. Исправляет генератор, исправление заново проверяется кодом;
     при любом сбое остаётся принятый ранее ответ."""
-    if not config.REVIEW or not needs_review(question, result, hits, docs):
+    if not config.REVIEW or not needs_review(result, hits, docs):
         return accepted
-    remarks = review_answer(question, hits, result["answer"], today)
-    if remarks is None:
+    found = review_answer(question, hits, result["answer"], today)
+    if found is None:
         accepted.review = "error"
         return accepted
-    if not remarks:
+    errors, extra = found
+    if not errors and not extra:
         accepted.review = "clean"
         return accepted
+    remarks = errors + [f"Лишнее: «{e[:200]}»" for e in extra]
     accepted.review, accepted.remarks = "kept", remarks
 
+    request = "Проверяющий сверил ответ с <context> и вопросом."
+    if errors:
+        request += (
+            "\nОшибки:\n- " + "\n- ".join(errors)
+            + "\nПерепроверь каждую по <context>. Если замечание справедливо, исправь только то, "
+            "на что оно указывает. Если несправедливо, оставь это место без изменений."
+        )
+    if extra:
+        request += (
+            "\nВ вопросе об этом не спрашивали, убери из ответа:\n- "
+            + "\n- ".join(f"«{e}»" for e in extra)
+            + "\nУбери эти фрагменты целиком, а из строки «Источник» убери пункты, которые "
+            "упоминались только в них."
+        )
+    request += "\nОстальной ответ не меняй и ничего не добавляй. Ответь в том же формате json."
     messages = base_messages + [
         {"role": "assistant", "content": raw},
-        {
-            "role": "user",
-            "content": "Проверяющий сверил ответ с <context> и оставил замечания:\n- "
-            + "\n- ".join(remarks)
-            + "\nПерепроверь каждое замечание по <context>. Если замечание справедливо, исправь "
-            "только то, на что оно указывает, остальной ответ не меняй и ничего не добавляй. "
-            "Если замечание несправедливо, верни прежний ответ без изменений. "
-            "Ответь в том же формате json.",
-        },
+        {"role": "user", "content": request},
     ]
     try:
         fixed, _ = llm.chat_json(messages)
@@ -494,9 +502,14 @@ def reviewed(
         return accepted
     if fixed is None or find_problems(fixed, hits, docs, question, today):
         return accepted
-    text = finalize(fixed["answer"])
+    text = final_text(fixed)
     if text == accepted.text:
         return accepted
+    if not errors:
+        # при сокращении ответ не должен вырасти, получить новые факты или превратиться в отказ
+        shrunk = len(text) < len(accepted.text) and facts(text) <= facts(accepted.text)
+        if not shrunk or (fixed.get("found") is False) != (result.get("found") is False):
+            return accepted
     return Answer(
         text,
         "not_found" if fixed.get("found") is False else accepted.status,
@@ -507,6 +520,19 @@ def reviewed(
         "revised",
         remarks,
     )
+
+
+def drop_empty_source(text: str) -> str:
+    """У отказа источника нет: концовка «Источник: …» без номера документа, пункта или статьи убирается."""
+    start = text.rfind("Источник:")
+    if start > 0 and not re.search(r"\d", text[start:]):
+        return text[:start].rstrip()
+    return text
+
+
+def final_text(result: dict) -> str:
+    text = finalize(result["answer"])
+    return drop_empty_source(text) if result.get("found") is False else text
 
 
 def answer_question(
@@ -543,7 +569,7 @@ def answer_question(
                 else ("fixed" if attempt == 2 else "ok")
             )
             accepted = Answer(
-                finalize(result["answer"]),
+                final_text(result),
                 status,
                 attempt,
                 [],
