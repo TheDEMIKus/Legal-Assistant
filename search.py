@@ -11,7 +11,7 @@ import numpy as np
 
 import config
 import llm
-from loader import Chunk, Document
+from loader import Chunk, Document, without_notes
 
 # потолок на случай увеличения TOP_K: реранк длинного списка кандидатов слишком медленный
 MAX_RERANK_CANDIDATES = 40
@@ -113,7 +113,8 @@ class SearchIndex:
         self.chunks = chunks
         self.bm25 = bm25s.BM25()
         self.bm25.index([tokenize(c.text) for c in chunks], show_progress=False)
-        self.vectors = llm.embed([c.text for c in chunks])
+        # BM25 остаётся на полном тексте: вопросы об изменениях находятся по словам из пометок
+        self.vectors = llm.embed([without_notes(c.text) for c in chunks])
 
     def embed_queries(self, questions: list[str]) -> list[np.ndarray]:
         """Векторы всех запросов пачками, а не отдельным запросом на каждый вопрос."""
@@ -125,7 +126,9 @@ class SearchIndex:
 
         candidates = interleave(top_indices(bm25, config.TOP_K), top_indices(vector, config.TOP_K))
         candidates = candidates[:MAX_RERANK_CANDIDATES]
-        ranked = llm.rerank(rerank_query(question), [self.chunks[i].text for i in candidates])
+        ranked = llm.rerank(
+            rerank_query(question), [without_notes(self.chunks[i].text) for i in candidates]
+        )
         hits = [Hit(self.chunks[candidates[i]], score, "rerank") for i, score in ranked]
         return hits + self.related_hits(hits, vector)
 

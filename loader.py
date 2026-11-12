@@ -270,6 +270,13 @@ def hide_amendment_notes(text: str, question: str) -> str:
     return "\n".join(l for l in text.splitlines() if not AMENDMENT_RE.match(l.strip()))
 
 
+def without_notes(text: str) -> str:
+    """Текст фрагмента для эмбеддинга: пометки Гаранта об изменениях бывают длиннее самой нормы
+    и уводят вектор от её смысла. Фрагмент из одних пометок остаётся как есть."""
+    lines = [l for l in text.splitlines() if not NOTE_RE.match(l.strip())]
+    return "\n".join(lines) if len(lines) > 1 else text
+
+
 def is_article_heading(line: str) -> bool:
     # строка «Статья 1. Установить МРОТ … в месяц.» является нормой, а не заголовком
     return bool(ARTICLE_RE.match(line)) and len(line) <= 200 and not line.endswith(".")
