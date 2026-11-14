@@ -300,21 +300,29 @@ def get_document_detail_endpoint(doc_id: int) -> dict[str, Any]:
     }
 
 
-# --- Раздача статики (HTML, CSS, JS) ---
+# --- Раздача статики ---
 
 STATIC_DIR.mkdir(exist_ok=True)
-app.mount("/veb_myau", StaticFiles(directory=STATIC_DIR), name="vab_myau")
+
+# CSS, JS и остальные статические файлы
+app.mount(
+    "/static",
+    StaticFiles(directory=STATIC_DIR),
+    name="static"
+)
 
 
+# Главная страница
 @app.get("/", include_in_schema=False)
 def serve_frontend():
-    """Отдаёт главную страницу веб-интерфейса."""
     index_file = STATIC_DIR / "index.html"
+
     if not index_file.is_file():
         raise HTTPException(
             status_code=404,
-            detail="Файл static/index.html не найден. Положите файлы фронтенда в папку static/.",
+            detail="Файл index.html не найден"
         )
+
     return FileResponse(index_file)
 
 
