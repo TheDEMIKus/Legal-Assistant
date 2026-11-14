@@ -78,6 +78,7 @@ def main() -> None:
         log(
             f"[{qid}] {result.status} {time.monotonic() - t0:.1f} с"
             + (f" — {detail}" if detail else "")
+            + (f" | отбор: {result.candidate_count}/4, выбран #{result.selected_index + 1}, голоса {result.vote_counts}" if result.candidate_count else " | отбор: 0/4")
             + (f" | судья: {result.review}" if result.review else "")
             + (f" — {' / '.join(result.remarks)}" if result.remarks else "")
         )
