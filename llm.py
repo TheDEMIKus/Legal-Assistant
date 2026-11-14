@@ -60,7 +60,11 @@ def post(path: str, payload: dict, key: str) -> dict:
     if not config.BASE_URL or not key:
         raise LLMError(f"{path}: не задан адрес API или ключ")
     url = config.BASE_URL + path
-    headers = {"Authorization": f"Bearer {key}"}
+    headers = {"Authorization": f"Bearer {key}",
+               "HTTP-Referer": "http://localhost:8000",
+                "X-Title": "PSB Legal Assistant",
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+               }
     last_error = ""
     for attempt in range(config.HTTP_RETRIES):
         if attempt:
