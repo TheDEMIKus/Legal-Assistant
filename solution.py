@@ -33,14 +33,6 @@ def write_submission(questions: list[tuple[str, str]], answers: dict[str, str]) 
             writer.writerow([qid, answers[qid]])
 
 
-def check_reranker() -> None:
-    """Реранкер впервые нужен только на первом вопросе; проверка заранее даёт понятную ошибку вместо трейсбека из потока."""
-    try:
-        llm.rerank("проверка", ["первый документ", "второй документ"], top_n=1)
-    except llm.LLMError as exc:
-        raise SystemExit(f"Реранкер {config.RERANKER_MODEL} недоступен: {exc}") from exc
-
-
 def main() -> None:
     started = time.monotonic()
     log(config.describe())
@@ -55,7 +47,6 @@ def main() -> None:
         seen.add(qid)
         questions.append((qid, question))
     docs, chunks = load_knowledge_base()
-    check_reranker()
     index = SearchIndex(docs, chunks)
     vectors = index.embed_queries([q for _, q in questions])
     log(

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import sys
+import threading
 from dataclasses import dataclass
 from itertools import zip_longest
 
@@ -104,7 +106,7 @@ def rerank_query(question: str) -> str:
 class Hit:
     chunk: Chunk
     score: float
-    source: str  # "rerank" или "related"
+    source: str  # "rerank", "fallback" или "related"
 
 
 class SearchIndex:
@@ -114,6 +116,8 @@ class SearchIndex:
         self.bm25 = bm25s.BM25()
         self.bm25.index([tokenize(c.text) for c in chunks], show_progress=False)
         self.vectors = llm.embed([c.text for c in chunks])
+        self._reranker_available = True
+        self._reranker_lock = threading.Lock()
 
     def embed_queries(self, questions: list[str]) -> list[np.ndarray]:
         """Векторы всех запросов пачками, а не отдельным запросом на каждый вопрос."""
@@ -125,8 +129,38 @@ class SearchIndex:
 
         candidates = interleave(top_indices(bm25, config.TOP_K), top_indices(vector, config.TOP_K))
         candidates = candidates[:MAX_RERANK_CANDIDATES]
-        ranked = llm.rerank(rerank_query(question), [self.chunks[i].text for i in candidates])
-        hits = [Hit(self.chunks[candidates[i]], score, "rerank") for i, score in ranked]
+        with self._reranker_lock:
+            reranker_available = self._reranker_available
+        if reranker_available:
+            try:
+                ranked = llm.rerank(
+                    rerank_query(question),
+                    [self.chunks[i].text for i in candidates],
+                )
+                hits = [
+                    Hit(self.chunks[candidates[i]], score, "rerank")
+                    for i, score in ranked
+                ]
+            except llm.LLMError as exc:
+                with self._reranker_lock:
+                    first_failure = self._reranker_available
+                    self._reranker_available = False
+                if first_failure:
+                    print(
+                        "Реранкер недоступен; отключаю его до конца прогона и "
+                        f"использую BM25 + эмбеддинги: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                hits = [
+                    Hit(self.chunks[i], 0.0, "fallback")
+                    for i in candidates[: config.RERANKER_TOP_N]
+                ]
+        else:
+            hits = [
+                Hit(self.chunks[i], 0.0, "fallback")
+                for i in candidates[: config.RERANKER_TOP_N]
+            ]
         return hits + self.related_hits(hits, vector)
 
     def related_hits(self, hits: list[Hit], relevance: np.ndarray) -> list[Hit]:
