@@ -46,7 +46,7 @@ LLM_MODEL = env(
     "LLM_MODEL", "GEN_MODEL", "OPENAI_MODEL", default="deepseek/deepseek-v4.1-flash"
 )
 EMB_MODEL = env("EMB_MODEL", default="baai/bge-m3")
-RERANKER_MODEL = env("RERANKER_MODEL", default="qwen/qwen3-reranker-8b")
+RERANKER_MODEL = env("RERANKER_MODEL", default="cohere/rerank-5-fast")
 
 DATA_DIR = Path(env("DATA_DIR", default="data"))
 

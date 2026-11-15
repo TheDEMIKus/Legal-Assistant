@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
 from difflib import SequenceMatcher
@@ -11,7 +10,7 @@ from difflib import SequenceMatcher
 import config
 import llm
 from loader import INJECTION_RE, MONTHS, Document, hide_amendment_notes, parse_date
-from search import TURN_RE, Hit, parse_dialog, tokenize
+from search import TURN_RE, Hit, parse_dialog
 
 MAX_ANSWER_CHARS = 10_000
 
@@ -117,6 +116,20 @@ TAG_RE = re.compile(r"</?\s*(context|question|doc|answer)\b[^>]*>", re.IGNORECAS
 YEAR_RE = re.compile(r"\b20\d{2}\b")
 MAX_REMARKS = 3
 
+
+def current_date_mentioned(text: str, today: date) -> bool:
+    """Ищет текущую дату в обычных числовых и русских текстовых форматах."""
+    day, month, year = today.day, today.month, today.year
+    numeric = re.compile(
+        rf"(?<!\d)(?:0?{day}[./-]0?{month}[./-]{year}|{year}[./-]0?{month}[./-]0?{day})(?!\d)"
+    )
+    month_name = next(name for name, number in MONTHS.items() if number == month)
+    written = re.compile(
+        rf"(?<!\w)0?{day}(?:-е|-го)?\s+{re.escape(month_name)}\.?[,]?\s+{year}(?!\d)",
+        re.IGNORECASE,
+    )
+    return bool(numeric.search(text) or written.search(text))
+
 FACT_RE = re.compile(
     r"\d{1,2}\.\d{1,2}\.\d{4}"
     r"|[А-ЯA-Z]{1,3}-\d+/\d{4}"
@@ -169,9 +182,6 @@ class Answer:
     # "" — судья не вызывался, иначе "clean", "revised", "kept", "error"
     review: str = ""
     remarks: list[str] = field(default_factory=list)
-    candidate_count: int = 0
-    selected_index: int = -1
-    vote_counts: dict[str, int] = field(default_factory=dict)
 
 
 def clean(text: str) -> str:
@@ -398,12 +408,10 @@ def find_problems(
     given = " ".join(sources) + " " + norm(question)
     # о текущей дате ниже отдельное замечание, общее «отсутствует в документах» для неё не нужно
     everything = given + f" {today:%d.%m.%Y}"
-    month = next(name for name, number in MONTHS.items() if number == today.month)
-    for form in (f"{today:%d.%m.%Y}", f"{today.day} {month} {today.year}"):
-        if form in norm(answer) and form not in given:
-            problems.append(
-                f"В ответе названа текущая дата «{form}»; убери число и напиши «сейчас» или «на текущую дату»."
-            )
+    if current_date_mentioned(answer, today) and not current_date_mentioned(given, today):
+        problems.append(
+            "В ответе названа текущая дата; убери её и напиши «сейчас» или «на текущую дату»."
+        )
     quotes = result.get("quotes") if isinstance(result.get("quotes"), list) else []
 
     cited_docs: list[Document] = []
@@ -477,7 +485,47 @@ def is_clarification(result: dict) -> bool:
     return result.get("clarify") is True and isinstance(answer, str) and "?" in answer
 
 
-VAGUE_TURN_WORDS = 8
+VAGUE_UTTERANCE_RE = re.compile(
+    r"^(?:что там(?: .*)?"
+    r"|что по (?:договор\w*|контракт\w*)(?: .*)?"
+    r"|как быть(?: с .*)?"
+    r"|хотим (?:и дальше )?(?:работать|сотрудничать)(?: с .+)?"
+    r"|по поводу (?:договор\w*|контракт\w*)(?: .*)?"
+    r"|есть вопрос(?: .*)?"
+    r"|нужно обсудить (?:договор\w*|контракт\w*)(?: .*)?)\??$"
+)
+CLEAR_TASK_RE = re.compile(
+    r"\b(?:кто|какой|какая|какие|каков|сколько|когда|где|почему|зачем|как|ли)\b"
+    r"|\b(?:срок|оплат\w*|цен\w*|сумм\w*|штраф\w*|неустойк\w*|ответственност\w*|"
+    r"поставк\w*|доставк\w*|аренд\w*|ндс|аванс\w*|отсрочк\w*|расторжен\w*|"
+    r"документ\w*|пункт\w*|стать\w*)\b",
+    re.IGNORECASE,
+)
+CLARIFICATION_STOPWORDS = {
+    "какой", "какая", "какие", "каков", "кто", "что", "сколько", "когда",
+    "где", "почему", "зачем", "как", "ли", "там", "этот", "эта", "это", "эти",
+    "договор", "контракт", "контрагент", "компания", "организация", "условия", "вопрос",
+    "расскажите", "подскажите", "пожалуйста", "проверьте", "узнать", "хотим", "дальше",
+    "работать", "сотрудничать", "срок", "сумма", "сумму", "пункт", "статья",
+}
+
+
+def clarification_evidence_differs(
+    left: Document, right: Document, hits: list[Hit]
+) -> bool:
+    """Требует различий в найденных фрагментах одного и того же раздела документов."""
+    left_sections: dict[str, list[str]] = {}
+    right_sections: dict[str, list[str]] = {}
+    for hit in hits:
+        target = left_sections if hit.chunk.doc_id == left.id else (
+            right_sections if hit.chunk.doc_id == right.id else None
+        )
+        if target is not None:
+            target.setdefault(hit.chunk.section, []).append(norm(hit.chunk.body))
+    for section in left_sections.keys() & right_sections.keys():
+        if any(a != b for a in left_sections[section] for b in right_sections[section]):
+            return True
+    return False
 
 
 def clarification_problems(
@@ -498,29 +546,74 @@ def clarification_problems(
         for h in hits
         if docs[h.chunk.doc_id].kind == "company"
     }
-    choices = sum(
-        any(mentions(offered, name) for name in document_names(doc))
-        for doc in company.values()
-    )
-    if choices >= 2:
-        named = [
-            name
-            for doc in company.values()
-            for name in document_names(doc)
-            if mentions(asked, name)
-        ]
-        if named:
-            return [
-                f"Документ в вопросе уже назван («{named[0]}»), выбирать между документами не нужно. "
-                "Ответь по существу."
-            ]
-        return []
     last = turns[-1][1] if turns else question
-    if len(last.split()) > VAGUE_TURN_WORDS:
+    offered_docs = [
+        doc
+        for doc in company.values()
+        if any(mentions(offered, name) for name in document_names(doc))
+    ]
+    for i, left in enumerate(offered_docs):
+        for right in offered_docs[i + 1 :]:
+            left_names, right_names = document_names(left), document_names(right)
+            shared_aliases: set[str] = set()
+            for left_name in left_names:
+                for right_name in right_names:
+                    left_parts = re.findall(r"[а-яa-z0-9]+", left_name)
+                    right_parts = re.findall(r"[а-яa-z0-9]+", right_name)
+                    shared = []
+                    for a, b in zip(left_parts, right_parts):
+                        if a != b:
+                            break
+                        shared.append(a)
+                    if shared and len(" ".join(shared)) >= 4 and (
+                        len(shared) < len(left_parts) or len(shared) < len(right_parts)
+                    ):
+                        shared_aliases.add(" ".join(shared))
+            uniquely_named = any(
+                mentions(asked, name)
+                for doc in (left, right)
+                for name in document_names(doc)
+            )
+            ambiguous_name_used = any(mentions(asked, alias) for alias in shared_aliases)
+            shared_words = {
+                word
+                for alias in shared_aliases
+                for word in re.findall(r"[а-яa-z0-9]+", alias)
+            }
+            subject_terms = {
+                word
+                for word in re.findall(r"[а-яa-z]{4,}", asked)
+                if word not in CLARIFICATION_STOPWORDS and word not in shared_words
+            }
+            subject_disambiguates = any(
+                mentions(norm(left.text), term) != mentions(norm(right.text), term)
+                for term in subject_terms
+            )
+            if (
+                ambiguous_name_used
+                and not uniquely_named
+                and not subject_disambiguates
+                and clarification_evidence_differs(left, right, hits)
+            ):
+                return []
+
+    vague_turn = VAGUE_UTTERANCE_RE.fullmatch(norm(last).strip().rstrip(".! "))
+    if vague_turn and not CLEAR_TASK_RE.search(last):
+        return []
+    if "?" in last:
         return [
-            "Уточнение не требуется: вопрос понятен. Ответь по существу по документам из <context>."
+            "Уточнение не требуется: в реплике задан прямой вопрос. Ответь по существу "
+            "по документам из <context>."
         ]
-    return []
+    if not CLEAR_TASK_RE.search(last) and len(last.split()) <= 2:
+        return [
+            "Уточнение допустимо только для действительно расплывчатой реплики; ответь по существу "
+            "по документам из <context>."
+        ]
+    return [
+        "Уточнение не требуется: в реплике уже понятна тема или задан конкретный вопрос. "
+        "Ответь по существу по документам из <context>."
+    ]
 
 
 def is_serious(problems: list[str]) -> bool:
@@ -684,9 +777,6 @@ def reviewed(
         accepted.first_problems,
         "revised",
         remarks,
-        accepted.candidate_count,
-        accepted.selected_index,
-        accepted.vote_counts,
     )
 
 
@@ -697,93 +787,20 @@ def final_text(result: dict) -> str:
     return text
 
 
-@dataclass
-class Candidate:
-    """Один прошедший программные проверки вариант ответа."""
-    result: dict
-    raw: str
-    accepted: Answer
-    temperature: float
-    index: int
-
-
-def answer_type(result: dict) -> str:
-    """Класс ответа для голосования: по существу, отказ или уточнение."""
-    if is_clarification(result):
-        return "clarify"
-    if result.get("found") is False:
-        return "refusal"
-    return "answer"
-
-
-def vote_tokens(text: str) -> dict[str, float]:
-    """Лексические факты ответа с нормализацией русских слов из поискового токенизатора."""
-    result: dict[str, float] = {}
-    for token in set(tokenize(text)):
-        weight = 2.5 if any(c.isdigit() for c in token) else 1.0
-        result[token] = weight
-    return result
-
-
-def candidate_similarity(left: Candidate, right: Candidate) -> float:
-    """Взвешенный Jaccard по содержанию: общие факты повышают сходство, уникальные снижают."""
-    a = vote_tokens(left.result["answer"])
-    b = vote_tokens(right.result["answer"])
-    if not a and not b:
-        return 1.0
-    keys = a.keys() | b.keys()
-    intersection = sum(min(a.get(k, 0.0), b.get(k, 0.0)) for k in keys)
-    union = sum(max(a.get(k, 0.0), b.get(k, 0.0)) for k in keys)
-    return intersection / union if union else 0.0
-
-
-def select_candidate(candidates: list[Candidate]) -> Candidate | None:
-    """Голосование по типу, затем детерминированный выбор медоида внутри победившего типа.
-
-    При равенстве голосов приоритет у типа опорной генерации (index=0).
-    При равенстве сходства также выигрывает опорная генерация, затем меньший index.
-    """
-    if not candidates:
-        return None
-    groups: dict[str, list[Candidate]] = {}
-    for candidate in candidates:
-        groups.setdefault(answer_type(candidate.result), []).append(candidate)
-    winning_type = max(
-        groups,
-        key=lambda kind: (
-            len(groups[kind]),
-            any(c.index == 0 for c in groups[kind]),
-            # Последний стабильный tie-breaker не зависит от порядка завершения потоков.
-            {"answer": 2, "refusal": 1, "clarify": 0}[kind],
-        ),
-    )
-    group = groups[winning_type]
-    return max(
-        group,
-        key=lambda candidate: (
-            sum(candidate_similarity(candidate, other) for other in group if other is not candidate),
-            candidate.index == 0,
-            -candidate.index,
-        ),
-    )
-
-
-def generate_candidate(
+def generate_answer(
     question: str,
     hits: list[Hit],
     docs: list[Document],
     today: date,
-    temperature: float,
-    index: int,
-) -> Candidate | None:
-    """Одна независимая генерация с прежней проверкой и одним исправляющим повтором."""
+) -> tuple[Answer, dict, str] | None:
+    """Одна генерация с прежней проверкой и одним исправляющим повтором."""
     base_messages = build_messages(question, hits, today)
     messages = base_messages
     first_problems: list[str] = []
 
     for attempt in (1, 2):
         try:
-            result, raw = llm.chat_json(messages, temperature=temperature)
+            result, raw = llm.chat_json(messages, temperature=config.TEMPERATURE)
         except llm.EmptyResponse:
             continue
         problems = (
@@ -803,7 +820,7 @@ def generate_candidate(
             accepted = Answer(
                 final_text(result), status, attempt, [], result.get("quotes") or [], first_problems
             )
-            return Candidate(result, raw, accepted, temperature, index)
+            return accepted, result, raw
         if attempt == 1:
             messages = messages + [
                 {"role": "assistant", "content": raw},
@@ -816,7 +833,6 @@ def generate_candidate(
                 },
             ]
 
-    # Непрошедший проверки вариант исключается из голосования.
     return None
 
 
@@ -827,45 +843,22 @@ def answer_question(
     if not hits:
         return Answer(NOT_FOUND, "not_found")
 
-    # Четыре независимых варианта: один опорный и три с повышенной температурой.
-    temperatures = (0.0, 0.6, 0.6, 0.6)
-    candidates: list[Candidate] = []
-    with ThreadPoolExecutor(max_workers=len(temperatures)) as pool:
-        futures = [
-            pool.submit(generate_candidate, question, hits, docs, today, temperature, i)
-            for i, temperature in enumerate(temperatures)
-        ]
-        # Сохраняем исходный индекс, поэтому результат не зависит от порядка завершения запросов.
-        for future in as_completed(futures):
-            candidate = future.result()
-            if candidate is not None:
-                candidates.append(candidate)
-
-    selected = select_candidate(candidates)
-    if selected is None:
+    generated = generate_answer(question, hits, docs, today)
+    if generated is None:
         return Answer(
             NOT_FOUND, "fallback", attempts=2,
-            problems=["ни один вариант не прошёл проверки"], candidate_count=0
+            problems=["ответ не прошёл проверки"],
         )
 
-    vote_counts: dict[str, int] = {}
-    for candidate in candidates:
-        kind = answer_type(candidate.result)
-        vote_counts[kind] = vote_counts.get(kind, 0) + 1
-    selected.accepted.candidate_count = len(candidates)
-    selected.accepted.selected_index = selected.index
-    selected.accepted.vote_counts = vote_counts
-
-    # Судья ошибок рассуждения вызывается ровно один раз - после отбора.
+    accepted, result, raw = generated
     base_messages = build_messages(question, hits, today)
     return reviewed(
-        selected.accepted,
-        selected.result,
-        selected.raw,
+        accepted,
+        result,
+        raw,
         base_messages,
         question,
         hits,
         docs,
         today,
     )
-
