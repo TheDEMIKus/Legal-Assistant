@@ -19,6 +19,7 @@ import llm
 from answer import answer_question
 from loader import Chunk, Document, load_knowledge_base
 from search import SearchIndex
+from solution import check_reranker
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "veb_myau"
@@ -32,16 +33,6 @@ class AppState:
 
 
 state = AppState()
-
-
-def check_reranker() -> None:
-    """Проверяет доступность реранкера до построения поискового индекса."""
-    try:
-        llm.rerank("проверка", ["первый документ", "второй документ"], top_n=1)
-    except llm.LLMError as exc:
-        raise RuntimeError(
-            f"Реранкер {config.RERANKER_MODEL} недоступен: {exc}"
-        ) from exc
 
 
 @asynccontextmanager
