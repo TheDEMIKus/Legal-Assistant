@@ -19,7 +19,6 @@ import llm
 from answer import answer_question
 from loader import Chunk, Document, load_knowledge_base
 from search import SearchIndex
-from solution import check_reranker
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "veb_myau"

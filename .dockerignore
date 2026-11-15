@@ -1,0 +1,26 @@
+# Виртуальные окружения и кэш Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[codz]
+.ruff_cache/
+.pytest_cache/
+
+# Секреты (передаются через docker-compose env_file)
+.env
+.envrc
+
+# Git и IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Локальные данные и прогоны хакатона (не нужны внутри контейнера)
+data/
+starter/
+eval/
+submission.csv
+submission.zip
+submission-examples.zip
