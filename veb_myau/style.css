@@ -43,30 +43,14 @@ body {
 .brand-wrap {
   display: flex;
   align-items: center;
-  gap: 14px;
 }
 
-.psb-logo {
-  width: 42px;
-  height: 42px;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1.5px solid rgba(255, 255, 255, 0.25);
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.brand-title {
-  font-weight: 800;
-  font-size: 16px;
-  letter-spacing: -0.2px;
-}
-
-.brand-subtitle {
-  font-size: 12px;
-  color: #CBD5E1;
-  margin-top: 2px;
+.brand-logo {
+  width: 137px;
+  height: 50px;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
 }
 
 .header-metrics {
@@ -145,8 +129,27 @@ body {
 .chats-panel {
   display: flex;
   flex-direction: column;
-  max-height: 36%;
-  min-height: 170px;
+  max-height: 34%;
+  min-height: 150px;
+}
+
+/* Панель закрепленных дел */
+.pinned-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 26%;
+  min-height: 115px;
+  background: linear-gradient(135deg, #EEF2FF 0%, #FFF7ED 100%);
+  border-color: #C7D2FE;
+}
+
+.pinned-badge {
+  background: var(--psb-blue);
+  color: #FFFFFF;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
 }
 
 .new-chat-btn {
@@ -221,43 +224,50 @@ body {
   font-weight: 700;
   color: var(--psb-dark);
   line-height: 1.3;
-  display: -webkit-box;
-  /* -webkit-line-clamp: 1; */
-  -webkit-box-orient: vertical;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-actions {
   display: flex;
   gap: 4px;
-  opacity: 0.65;
-}
-
-.session-item:hover .session-actions {
-  opacity: 1;
 }
 
 .session-icon-btn {
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
-  color: var(--text-muted);
-  padding: 0 3px;
+  padding: 1px 4px;
+  opacity: 0.45;
+  transition: all 0.15s;
+}
+
+.session-item:hover .session-icon-btn {
+  opacity: 0.85;
 }
 
 .session-icon-btn:hover {
-  color: var(--psb-orange);
+  opacity: 1 !important;
+  background: var(--psb-orange-soft);
+  border-color: var(--psb-orange);
+}
+
+.session-icon-btn.pinned {
+  opacity: 1;
+  background: var(--psb-orange-soft);
+  border-color: var(--psb-orange);
 }
 
 .session-preview {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 3px;
-  display: -webkit-box;
-  /* -webkit-line-clamp: 1; */
-  -webkit-box-orient: vertical;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-meta {
@@ -266,19 +276,6 @@ body {
   margin-top: 4px;
   display: flex;
   justify-content: space-between;
-}
-
-.search-match-badge {
-  background: #FEF3C7;
-  color: #B45309;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-weight: 700;
-}
-
-.mascot-card {
-  background: linear-gradient(135deg, #EEF2FF, #FFF7ED);
-  border-color: #C7D2FE;
 }
 
 .side-header {
@@ -297,47 +294,6 @@ body {
   font-size: 11.5px;
   color: var(--text-muted);
   line-height: 1.4;
-}
-
-.pin-btn {
-  background: #FFFFFF;
-  color: var(--psb-blue);
-  border: 1px solid var(--psb-blue);
-  padding: 3px 9px;
-  border-radius: 8px;
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.pin-btn.active {
-  background: var(--psb-orange);
-  border-color: var(--psb-orange);
-  color: #FFFFFF;
-}
-
-.quick-list {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.quick-btn {
-  text-align: left;
-  background: #FFFFFF;
-  border: 1px solid var(--psb-border);
-  padding: 6px 9px;
-  border-radius: 7px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text-main);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.quick-btn:hover {
-  border-color: var(--psb-orange);
-  background: var(--psb-orange-soft);
 }
 
 /* Список документов базы */
@@ -488,11 +444,6 @@ body {
   font-size: 11.5px;
 }
 
-.meta-note {
-  color: var(--text-muted);
-  font-weight: 600;
-}
-
 .badge {
   padding: 3px 9px;
   border-radius: 999px;
@@ -502,7 +453,6 @@ body {
 }
 
 .badge.ok { background: #DCFCE7; color: #15803D; }
-.badge.fixed { background: #FFEDD5; color: #C2410C; }
 .badge.not_found, .badge.fallback { background: #F1F5F9; color: #475569; }
 .badge.error { background: #FEE2E2; color: #B91C1C; }
 
@@ -510,7 +460,7 @@ body {
   white-space: pre-wrap;
 }
 
-/* Раскрывающиеся блоки цитат, контекста и ошибок 1-й попытки */
+/* Раскрывающиеся блоки цитат */
 details.info-drawer {
   margin-top: 10px;
   background: #F8FAFC;
@@ -519,15 +469,6 @@ details.info-drawer {
   border-radius: 8px;
   padding: 8px 12px;
   font-size: 12.5px;
-}
-
-details.info-drawer.context-drawer {
-  border-left-color: var(--psb-blue);
-}
-
-details.info-drawer.warn-drawer {
-  background: #FFFBEB;
-  border-left-color: #F59E0B;
 }
 
 details.info-drawer summary {
@@ -555,6 +496,11 @@ details.info-drawer summary {
 .quote-doc-link {
   cursor: pointer;
   text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.quote-doc-link:hover {
+  color: var(--psb-orange);
 }
 
 /* =====================================================
@@ -582,71 +528,31 @@ details.info-drawer summary {
   overflow: visible;
 }
 
-/* Удар молотка: замах вверх (25deg) -> резкий удар по подставке (-8deg) -> отскок */
 @keyframes gavelStrike {
-  0%, 100% {
-    transform: rotate(24deg);
-  }
-  30% {
-    transform: rotate(34deg);
-  }
-  48% {
-    transform: rotate(-8deg);
-  }
-  58% {
-    transform: rotate(-1deg);
-  }
-  66% {
-    transform: rotate(-8deg);
-  }
+  0%, 100% { transform: rotate(24deg); }
+  30% { transform: rotate(34deg); }
+  48% { transform: rotate(-8deg); }
+  58% { transform: rotate(-1deg); }
+  66% { transform: rotate(-8deg); }
 }
 
-/* Пружинящее сжатие подставки в момент удара (на 48% цикла) */
 @keyframes blockBounce {
-  0%, 44%, 72%, 100% {
-    transform: translateY(0) scaleY(1);
-  }
-  49% {
-    transform: translateY(2.5px) scaleY(0.92);
-  }
-  58% {
-    transform: translateY(-1px) scaleY(1.03);
-  }
-  66% {
-    transform: translateY(1.5px) scaleY(0.96);
-  }
+  0%, 44%, 72%, 100% { transform: translateY(0) scaleY(1); }
+  49% { transform: translateY(2.5px) scaleY(0.92); }
+  58% { transform: translateY(-1px) scaleY(1.03); }
+  66% { transform: translateY(1.5px) scaleY(0.96); }
 }
 
-/* Расходящаяся ударная волна */
 @keyframes waveExpand {
-  0%, 45% {
-    transform: scale(0.35);
-    opacity: 0;
-  }
-  50% {
-    transform: scale(0.85);
-    opacity: 0.95;
-  }
-  82%, 100% {
-    transform: scale(1.65);
-    opacity: 0;
-  }
+  0%, 45% { transform: scale(0.35); opacity: 0; }
+  50% { transform: scale(0.85); opacity: 0.95; }
+  82%, 100% { transform: scale(1.65); opacity: 0; }
 }
 
-/* Искры и знак параграфа при ударе */
 @keyframes sparkBurst {
-  0%, 45% {
-    transform: translateY(4px) scale(0.5);
-    opacity: 0;
-  }
-  52% {
-    transform: translateY(-2px) scale(1.1);
-    opacity: 1;
-  }
-  80%, 100% {
-    transform: translateY(-12px) scale(0.8);
-    opacity: 0;
-  }
+  0%, 45% { transform: translateY(4px) scale(0.5); opacity: 0; }
+  52% { transform: translateY(-2px) scale(1.1); opacity: 1; }
+  80%, 100% { transform: translateY(-12px) scale(0.8); opacity: 0; }
 }
 
 .gavel-arm {
@@ -684,29 +590,12 @@ details.info-drawer summary {
   font-weight: 800;
   color: var(--psb-dark);
   font-size: 14px;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
-.pipeline-steps {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.p-step {
-  font-size: 11.5px;
-  font-weight: 700;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: #E2E8F0;
-  color: #475569;
-  transition: all 0.2s;
-}
-
-.p-step.active {
-  background: var(--psb-orange);
-  color: #FFFFFF;
-  box-shadow: 0 2px 8px rgba(255, 85, 0, 0.35);
+.mascot-subtitle {
+  font-size: 12.5px;
+  color: var(--text-muted);
 }
 
 /* Панель ввода */
@@ -752,17 +641,6 @@ details.info-drawer summary {
 .btn-primary:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-.btn-secondary {
-  background: #EEF2FF;
-  color: var(--psb-blue);
-  border: none;
-  padding: 10px 14px;
-  border-radius: 12px;
-  font-weight: 700;
-  font-size: 13px;
-  cursor: pointer;
 }
 
 /* Модальное окно документа */
@@ -835,4 +713,15 @@ details.info-drawer summary {
   font-size: 13px;
   line-height: 1.6;
   color: #1E293B;
+}
+
+/* Подсветка найденной цитаты в тексте документа */
+.doc-quote-highlight {
+  background: #FEF08A;
+  color: #0F1256;
+  font-weight: 700;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border-bottom: 2px solid var(--psb-orange);
+  box-shadow: 0 0 0 3px rgba(255, 85, 0, 0.18);
 }

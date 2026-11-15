@@ -5,8 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="712db907-8f2f-4431-b552-232b33a4af6d" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/veb_myau/app.js" beforeDir="false" afterPath="$PROJECT_DIR$/veb_myau/app.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/veb_myau/images/lex_logo-white.svg" beforeDir="false" afterPath="$PROJECT_DIR$/veb_myau/images/lex_logo-white.svg" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/veb_myau/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/veb_myau/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/veb_myau/style.css" beforeDir="false" afterPath="$PROJECT_DIR$/veb_myau/style.css" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -49,11 +54,12 @@
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.git.unshallow": "true",
     "git-widget-placeholder": "web",
-    "last_opened_file_path": "C:/Users/User/PycharmProjects/Hackaton-Legal-Assistant/veb_myau/static/veb_myau"
+    "last_opened_file_path": "C:/Users/User/PycharmProjects/Hackaton-Legal-Assistant/veb_myau/images"
   }
 }]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\User\PycharmProjects\Hackaton-Legal-Assistant\veb_myau\images" />
       <recent name="C:\Users\User\PycharmProjects\Hackaton-Legal-Assistant\veb_myau\static\veb_myau" />
       <recent name="C:\Users\User\PycharmProjects\Hackaton-Legal-Assistant\Legal-Assistant\data" />
     </key>
