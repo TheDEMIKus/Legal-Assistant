@@ -33,14 +33,6 @@ def write_submission(questions: list[tuple[str, str]], answers: dict[str, str]) 
             writer.writerow([qid, answers[qid]])
 
 
-def check_reranker() -> None:
-    """Реранкер впервые нужен только на первом вопросе; проверка заранее даёт понятную ошибку вместо трейсбека из потока."""
-    try:
-        llm.rerank("проверка", ["первый документ", "второй документ"], top_n=1)
-    except llm.LLMError as exc:
-        raise SystemExit(f"Реранкер {config.RERANKER_MODEL} недоступен: {exc}") from exc
-
-
 def main() -> None:
     started = time.monotonic()
     log(config.describe())
@@ -55,40 +47,52 @@ def main() -> None:
         seen.add(qid)
         questions.append((qid, question))
     docs, chunks = load_knowledge_base()
-    check_reranker()
     index = SearchIndex(docs, chunks)
     vectors = index.embed_queries([q for _, q in questions])
-    log(f"Вопросов: {len(questions)}, документов: {len(docs)}, чанков: {len(chunks)}, "
-        f"подготовка {time.monotonic() - started:.0f} с")
+    log(
+        f"Вопросов: {len(questions)}, документов: {len(docs)}, чанков: {len(chunks)}, "
+        f"подготовка {time.monotonic() - started:.0f} с"
+    )
 
     today = date.today()
     answers: dict[str, str] = {}
     statuses: Counter[str] = Counter()
+    reviews: Counter[str] = Counter()
 
-    def process(i: int) -> tuple[str, str, str]:
+    def process(i: int) -> tuple[str, str, str, str]:
         qid, question = questions[i]
         t0 = time.monotonic()
-        result = answer_question(question, index.search(question, vectors[i]), docs, today)
+        result = answer_question(
+            question, index.search(question, vectors[i]), docs, today
+        )
         detail = "; ".join(result.problems or result.first_problems)[:200]
-        log(f"[{qid}] {result.status} {time.monotonic() - t0:.1f} с"
-            + (f" — {detail}" if detail else ""))
-        return qid, result.text, result.status
+        log(
+            f"[{qid}] {result.status} {time.monotonic() - t0:.1f} с"
+            + (f" — {detail}" if detail else "")
+            + (f" | судья: {result.review}" if result.review else "")
+            + (f" — {' / '.join(result.remarks)}" if result.remarks else "")
+        )
+        return qid, result.text, result.status, result.review
 
     with ThreadPoolExecutor(max_workers=config.MAX_WORKERS) as pool:
         futures = [pool.submit(process, i) for i in range(len(questions))]
         for future in as_completed(futures):
             try:
-                qid, text, status = future.result()
+                qid, text, status, review = future.result()
             except Exception:
                 traceback.print_exc()
                 # остальные потоки не дожидаются: их запросы могут висеть до таймаута
                 os._exit(1)
             answers[qid] = text
             statuses[status] += 1
+            if review:
+                reviews[review] += 1
 
     write_submission(questions, answers)
     print(f"Создан submission.csv: {len(questions)} ответов", flush=True)
-    log(f"Готово за {time.monotonic() - started:.0f} с: {dict(statuses)}; API: {llm.stats}")
+    log(
+        f"Готово за {time.monotonic() - started:.0f} с: {dict(statuses)}; судья: {dict(reviews)}; API: {llm.stats}"
+    )
 
 
 if __name__ == "__main__":

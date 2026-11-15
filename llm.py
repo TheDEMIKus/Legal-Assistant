@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 import re
 import sys
@@ -207,14 +208,41 @@ def rerank(
         },
         config.RERANKER_API_KEY,
     )
-    results = data.get("results") or data.get("data") or []
+    results = data.get("results")
+    if not results:
+        results = data.get("data")
+    if results is None:
+        results = []
+    if not isinstance(results, list):
+        raise LLMError("rerank: поле results/data должно быть списком")
     ranked = []
-    for item in results:
+    seen: set[int] = set()
+    for position, item in enumerate(results):
+        if not isinstance(item, dict):
+            raise LLMError(f"rerank: элемент results[{position}] должен быть объектом")
         index = item.get("index")
-        score = item.get("relevance_score", item.get("score", 0.0))
-        if isinstance(index, int) and 0 <= index < len(documents):
-            ranked.append((index, float(score)))
+        if (
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or not 0 <= index < len(documents)
+        ):
+            raise LLMError(f"rerank: некорректный index в results[{position}]")
+        if index in seen:
+            raise LLMError(f"rerank: повторный index {index} в results")
+        score = item.get("relevance_score")
+        if score is None:
+            score = item.get("score")
+        if isinstance(score, bool) or score is None:
+            raise LLMError(f"rerank: отсутствует числовой score в results[{position}]")
+        try:
+            score = float(score)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise LLMError(f"rerank: некорректный score в results[{position}]") from exc
+        if not math.isfinite(score):
+            raise LLMError(f"rerank: нечисловой score в results[{position}]")
+        ranked.append((index, score))
+        seen.add(index)
     if not ranked:
         raise LLMError(f"rerank: пустой или непонятный ответ: {str(data)[:200]}")
-    ranked.sort(key=lambda pair: -pair[1])
+    ranked.sort(key=lambda pair: (-pair[1], pair[0]))
     return ranked[:top_n]
