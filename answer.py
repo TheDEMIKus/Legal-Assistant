@@ -12,8 +12,6 @@ import llm
 from loader import INJECTION_RE, MONTHS, Document, hide_amendment_notes, parse_date
 from search import TURN_RE, Hit, parse_dialog
 
-MAX_ANSWER_CHARS = 10_000
-
 NOT_FOUND = (
     "В базе знаний нет документов, позволяющих точно ответить на этот вопрос. "
     "Отвечать по памяти не буду, чтобы не ввести вас в заблуждение: нормы и условия могли измениться. "
@@ -114,7 +112,6 @@ REVIEW_SYSTEM = """Ты проверяешь ответ юридического
 
 TAG_RE = re.compile(r"</?\s*(context|question|doc|answer)\b[^>]*>", re.IGNORECASE)
 YEAR_RE = re.compile(r"\b20\d{2}\b")
-MAX_REMARKS = 3
 
 
 def current_date_mentioned(text: str, today: date) -> bool:
@@ -179,7 +176,6 @@ class Answer:
     problems: list[str] = field(default_factory=list)
     quotes: list[dict] = field(default_factory=list)
     first_problems: list[str] = field(default_factory=list)
-    # "" — судья не вызывался, иначе "clean", "revised", "kept", "error"
     review: str = ""
     remarks: list[str] = field(default_factory=list)
 
@@ -226,7 +222,7 @@ def quote_found(quote: str, source: str) -> bool:
 
 
 MIN_CLOSE_QUOTE_WORDS = 10
-# расхождение в этих словах меняет смысл нормы, такую цитату принимать нельзя
+# Эти расхождения могут менять юридический смысл цитаты.
 MEANING_WORDS = {
     "не",
     "ни",
@@ -325,7 +321,7 @@ def fact_supported(fact: str, source: str) -> bool:
         return True
     value = number.group(0)
     if fact_n[0].isalpha():
-        # «п. 3.1» в документе записан как «3.1.» в начале строки
+        # Номер пункта может быть указан без префикса «п.».
         return contains(value, source)
     if value.isdigit() and int(value) in NUMBER_WORDS:
         return contains(value, source) or NUMBER_WORDS[int(value)] in source
@@ -358,7 +354,7 @@ def check_calc(calc: object, source: str) -> tuple[list[str], list[str]]:
     for line in calc:
         if not isinstance(line, str) or not line.strip():
             continue
-        # единицы измерения («руб.», «дней») в расчёте не мешают
+        # Убираем единицы измерения перед разбором выражения.
         match = CALC_RE.match(re.sub(r"[а-яёa-z]+\.?", "", line.lower()))
         if not match:
             problems.append(
@@ -406,7 +402,6 @@ def find_problems(
 
     sources = [norm(h.chunk.text) for h in hits]
     given = " ".join(sources) + " " + norm(question)
-    # о текущей дате ниже отдельное замечание, общее «отсутствует в документах» для неё не нужно
     everything = given + f" {today:%d.%m.%Y}"
     if current_date_mentioned(answer, today) and not current_date_mentioned(given, today):
         problems.append(
@@ -630,11 +625,11 @@ def is_serious(problems: list[str]) -> bool:
 
 def finalize(text: str) -> str:
     text = " ".join(text.split())
-    if len(text) <= MAX_ANSWER_CHARS:
+    if len(text) <= config.MAX_ANSWER_CHARS:
         return text
-    cut = text[:MAX_ANSWER_CHARS]
+    cut = text[:config.MAX_ANSWER_CHARS]
     end = max(cut.rfind(". "), cut.rfind("; "))
-    return cut[: end + 1] if end > MAX_ANSWER_CHARS // 2 else cut
+    return cut[: end + 1] if end > config.MAX_ANSWER_CHARS // 2 else cut
 
 
 def cited_documents(
@@ -674,7 +669,6 @@ def needs_review(
         return True
     if any(d.valid_from or d.valid_until or d.related for d in cited):
         return True
-    # отказ при найденных документах компании: возможно, ответ в них есть
     return result.get("found") is False and any(
         docs[h.chunk.doc_id].kind == "company" for h in hits
     )
@@ -712,7 +706,7 @@ def review_answer(
         if isinstance(i, str) and i.strip().isdigit():
             i = int(i)
         own = sources[i - 1] if isinstance(i, int) and 1 <= i <= len(sources) else ""
-        # без настоящей цитаты и без привязки к тексту ответа замечание может быть выдумкой судьи
+        # Замечание принимается только с цитатой из контекста и фрагментом ответа.
         if INJECTION_RE.search(quote) or not quote_found(quote, own):
             continue
         if not quote_found(claim, answer_n):
@@ -721,7 +715,7 @@ def review_answer(
             f"В ответе: «{claim.strip()[:200]}». {why.strip()[:300]} "
             f"Фрагмент {i}: «{quote.strip()[:400]}»."
         )
-    return remarks[:MAX_REMARKS]
+    return remarks[:config.MAX_REMARKS]
 
 
 def reviewed(
@@ -736,7 +730,7 @@ def reviewed(
 ) -> Answer:
     """Судья только указывает на ошибку. Исправляет генератор, исправление заново проверяется кодом;
     при любом сбое остаётся принятый ранее ответ."""
-    if not config.REVIEW or not needs_review(question, result, hits, docs):
+    if not needs_review(question, result, hits, docs):
         return accepted
     remarks = review_answer(question, hits, result["answer"], today)
     if remarks is None:
@@ -798,7 +792,7 @@ def generate_answer(
     messages = base_messages
     first_problems: list[str] = []
 
-    for attempt in (1, 2):
+    for attempt in range(1, config.ANSWER_ATTEMPTS + 1):
         try:
             result, raw = llm.chat_json(messages, temperature=config.TEMPERATURE)
         except llm.EmptyResponse:

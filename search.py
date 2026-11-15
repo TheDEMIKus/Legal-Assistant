@@ -15,10 +15,6 @@ import config
 import llm
 from loader import Chunk, Document
 
-# потолок на случай увеличения TOP_K: реранк длинного списка кандидатов слишком медленный
-MAX_RERANK_CANDIDATES = 40
-MAX_RELATED = 2
-
 STOPWORDS = set("""
 и в во на по с со к ко о об от до за из у не ни ли а но же бы то что как это или для при
 мы нас наш наша наше наши вы вас ваш он она оно они их его ее мне меня мой я ты
@@ -33,7 +29,6 @@ ENDINGS = sorted("""
 а я о е ы и у ю ь
 """.split(), key=len, reverse=True)
 
-# Сокращения из вопросов, которых нет в документах; раскрываются и в запросах, и в базе.
 ABBREVIATIONS = [
     (r"юротдел\w*", "юридический отдел"),
     (r"юрслужб\w*", "юридический отдел"),
@@ -71,12 +66,12 @@ def tokenize(text: str) -> list[str]:
     text = text.lower().replace("ё", "е")
     for pattern, replacement in ABBREVIATION_RES:
         text = pattern.sub(replacement, text)
-    text = re.sub(r"(?<=\d)[\s ](?=\d{3}\b)", "", text)  # 450 000 → 450000
+    text = re.sub(r"(?<=\d)[\s ](?=\d{3}\b)", "", text)
     tokens = ["#" + m.replace("/", "-") for m in ID_RE.findall(text)]
     for word in WORD_RE.findall(text):
         parts = word.split("-")
         if len(parts) > 1:
-            # «альфа-трейд» и «альфа-трейдинг» должны различаться целиком, а не только по частям
+            # Сохраняем составное слово целиком, чтобы различать похожие названия.
             tokens.append("-".join(stem(p) for p in parts))
         tokens += [stem(p) for p in parts if p not in STOPWORDS]
     return tokens
@@ -128,7 +123,7 @@ class SearchIndex:
         vector = self.vectors @ query_vector
 
         candidates = interleave(top_indices(bm25, config.TOP_K), top_indices(vector, config.TOP_K))
-        candidates = candidates[:MAX_RERANK_CANDIDATES]
+        candidates = candidates[:config.MAX_RERANK_CANDIDATES]
         with self._reranker_lock:
             reranker_available = self._reranker_available
         if reranker_available:
@@ -167,10 +162,10 @@ class SearchIndex:
         """Допсоглашения и письма, меняющие найденный документ, модель должна видеть вместе с ним."""
         found_docs = {h.chunk.doc_id for h in hits}
         extra: list[Hit] = []
-        # только для лучших результатов: документ, найденный случайно, тянул бы лишний шум
+        # Связи ищутся только от лучших результатов, чтобы не расширять контекст случайно.
         for hit in hits[:2]:
             for doc_id in self.docs[hit.chunk.doc_id].related:
-                if doc_id in found_docs or len(extra) >= MAX_RELATED:
+                if doc_id in found_docs or len(extra) >= config.MAX_RELATED:
                     continue
                 own = [c for c in self.chunks if c.doc_id == doc_id]
                 best = max(own, key=lambda c: relevance[c.id])

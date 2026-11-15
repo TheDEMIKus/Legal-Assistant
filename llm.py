@@ -15,7 +15,6 @@ import numpy as np
 
 import config
 
-EMBED_BATCH = 64
 RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
@@ -46,7 +45,10 @@ def client() -> httpx.Client:
     with _client_lock:
         if _client is None:
             _client = httpx.Client(
-                timeout=httpx.Timeout(config.HTTP_TIMEOUT, connect=10.0),
+                timeout=httpx.Timeout(
+                    config.HTTP_TIMEOUT,
+                    connect=config.HTTP_CONNECT_TIMEOUT,
+                ),
                 limits=httpx.Limits(max_connections=config.MAX_WORKERS * 2 + 4),
             )
         return _client
@@ -101,7 +103,7 @@ def post(path: str, payload: dict, key: str) -> dict:
         if retry_after.isdigit():
             time.sleep(min(int(retry_after), 30))
         else:
-            # экспоненциальная пауза со случайной добавкой, чтобы потоки не били в API одновременно
+            # Случайная добавка распределяет повторные запросы по времени.
             time.sleep(min(2**attempt, 20) + random.random())
     raise LLMError(f"{path}: {last_error}")
 
@@ -121,9 +123,9 @@ def chat(
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
 
-    # DeepSeek в JSON-режиме возвращает строку из пробелов, если не смог выдать JSON
+    # Пустой JSON-ответ модели повторяется с тем же запросом.
     content = ""
-    for _ in range(3):
+    for _ in range(config.CHAT_ATTEMPTS):
         _count("chat")
         data = post("/chat/completions", payload, config.LLM_API_KEY)
         usage = data.get("usage") or {}
@@ -140,7 +142,7 @@ def chat(
         if content.strip() and not truncated:
             return content.strip()
         if truncated:
-            # в лимит входят и скрытые рассуждения модели, поэтому обрезаться может даже короткий ответ
+            # Увеличиваем лимит после обрезанного ответа.
             _count("truncated")
             payload["max_tokens"] = min(payload["max_tokens"] * 2, config.MAX_TOKENS_CEILING)
     if content.strip():
@@ -173,8 +175,8 @@ def chat_json(messages: list[dict], **kwargs) -> tuple[dict | None, str]:
 def embed(texts: list[str]) -> np.ndarray:
     """Нормированные векторы: косинусная близость считается скалярным произведением."""
     vectors: list[list[float]] = []
-    for i in range(0, len(texts), EMBED_BATCH):
-        batch = texts[i : i + EMBED_BATCH]
+    for i in range(0, len(texts), config.EMBED_BATCH):
+        batch = texts[i : i + config.EMBED_BATCH]
         _count("embed")
         data = post(
             "/embeddings",
