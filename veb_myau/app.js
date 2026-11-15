@@ -2,10 +2,13 @@ let dialogHistory = [];
 let allDocs = [];
 let mascotPinned = false;
 let stepInterval = null;
+let sessions = [];
+let activeSessionId = [];
 
 document.addEventListener("DOMContentLoaded", () => {
   loadStats();
   loadDocs();
+  createNewSession();
 });
 
 function escapeHtml(str) {
@@ -192,6 +195,17 @@ async function handleAsk(event) {
   userCard.textContent = question;
   stream.appendChild(userCard);
 
+   // Сохраняем в сессию
+  const session = sessions.find(s => s.id === activeSessionId);
+  if (session) {
+    session.messages.push({ role: "user", text: question });
+    if (session.title === "Новое дело") {
+      session.title = question.substring(0, 30) + (question.length > 30 ? "..." : "");
+    }
+    renderSessionsList();
+    updateActiveCaseBar();
+  }
+
   input.value = "";
   sendBtn.disabled = true;
   startMascotAnimation();
@@ -220,6 +234,10 @@ async function handleAsk(event) {
     dialogHistory.push({ role: "Ассистент", text: data.answer });
 
     updateTokenStats(data.llm_stats);
+
+     if (session) {
+      session.messages.push({ role: "bot", text: data.answer });
+    }
     renderBotAnswer(data);
   } catch (err) {
     const errCard = document.createElement("div");
@@ -335,4 +353,92 @@ function renderBotAnswer(data) {
   `;
 
   stream.appendChild(botCard);
+}
+
+function createNewSession() {
+  const newSession = {
+    id: Date.now().toString(),
+    title: "Новое дело",
+    messages: [],
+    date: new Date().toLocaleDateString('ru-RU')
+  };
+
+  sessions.unshift(newSession);
+  activeSessionId = newSession.id;
+
+  renderSessionsList();
+  updateActiveCaseBar();
+
+  document.getElementById("chat-stream").innerHTML = `
+    <div class="msg bot">
+      <div class="msg-meta"><span class="badge ok">ГОТОВ К РАБОТЕ</span></div>
+      <div class="msg-text">Здравствуйте! Задайте ваш вопрос по текущему делу.</div>
+    </div>
+  `;
+}
+
+function renderSessionsList() {
+  const container = document.getElementById("sessions-list");
+  if(!container) return;
+  const searchQ = document.getElementById("chat-search")?.value.toLowerCase().trim() || "";
+
+  let filtered = sessions;
+  if (searchQ) {
+    filtered = sessions.filter(s =>
+      s.title.toLowerCase().includes(searchQ) ||
+      s.messages.some(m => m.text.toLowerCase().includes(searchQ))
+    );
+  }
+
+  container.innerHTML = filtered.map(s => `
+    <div class="session-item ${s.id === activeSessionId ? 'active' : ''}" onclick="switchSession('${s.id}')">
+      <div class="session-top">
+        <div class="session-title">${escapeHtml(s.title)}</div>
+      </div>
+      <div class="session-preview">${s.messages.length > 0 ? escapeHtml(s.messages[s.messages.length-1].text.substring(0, 40)) + '...' : 'Пустое дело'}</div>
+      <div class="session-meta"><span>${s.date}</span><span>${s.messages.length} сообщ.</span></div>
+    </div>
+  `).join("");
+}
+
+function switchSession(id) {
+  activeSessionId = id;
+  const session = sessions.find(s => s.id === id);
+
+  renderSessionsList();
+  updateActiveCaseBar();
+
+  const stream = document.getElementById("chat-stream");
+  stream.innerHTML = "";
+
+  if (session.messages.length === 0) {
+    stream.innerHTML = `<div class="msg bot"><div class="msg-text">Задайте вопрос по этому делу.</div></div>`;
+  } else {
+    session.messages.forEach(msg => {
+      const card = document.createElement("div");
+      card.className = msg.role === "user" ? "msg user" : "msg bot";
+      card.innerHTML = `<div class="msg-text">${escapeHtml(msg.text)}</div>`;
+      stream.appendChild(card);
+    });
+  }
+  stream.scrollTop = stream.scrollHeight;
+}
+
+function updateActiveCaseBar() {
+  const session = sessions.find(s => s.id === activeSessionId);
+  if (session) {
+    document.getElementById("active-case-title").textContent = session.title;
+    document.getElementById("active-case-count").textContent = `Сообщений: ${session.messages.length}`;
+  }
+}
+
+function renameActiveSession() {
+  const session = sessions.find(s => s.id === activeSessionId);
+  if (!session) return;
+  const newTitle = prompt("Введите новое название для дела:", session.title);
+  if (newTitle && newTitle.trim()) {
+    session.title = newTitle.trim();
+    renderSessionsList();
+    updateActiveCaseBar();
+  }
 }
