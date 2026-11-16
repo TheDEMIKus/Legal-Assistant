@@ -224,17 +224,3 @@ __pycache__/
 .ruff_cache/
 
 .env
-
-data/
-starter/
-eval/
-
-# Результаты прогонов
-submission.csv
-submission.zip
-submission-examples.zip
-
-# Локальная оценка
-eval/work/
-eval/results/
-.idea
