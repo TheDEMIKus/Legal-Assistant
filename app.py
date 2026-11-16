@@ -42,7 +42,6 @@ async def lifespan(app: FastAPI):
     config.check()
 
     state.docs, state.chunks = load_knowledge_base()
-    check_reranker()
     state.index = SearchIndex(state.docs, state.chunks)
     state.startup_sec = round(time.monotonic() - t0, 2)
 

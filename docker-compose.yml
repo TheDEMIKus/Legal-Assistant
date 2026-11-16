@@ -1,9 +1,17 @@
 services:
-  lex-web:
-    build: .
-    container_name: lex-legal-assistant
+  legal-assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: psb-legal-assistant
     ports:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - DATA_DIR=data
+    volumes:
+      # Монтируем базу знаний и папку кэша/данных, чтобы не пересчитывать эмбеддинги при рестарте
+      - ./knowledge-base:/app/knowledge-base:ro
+      - ./data:/app/data
     restart: unless-stopped
